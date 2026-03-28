@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
 late List<CameraDescription> _cameras;
 
@@ -67,7 +68,7 @@ class _Snap2NotesAppState extends State<Snap2NotesApp> {
           brightness: Brightness.dark,
         ),
       ),
-      home: widget.isLoggedIn 
+      home: widget.isLoggedIn
           ? MainNavigationScreen(onThemeChanged: toggleTheme, currentThemeMode: _themeMode)
           : LoginScreen(onThemeChanged: toggleTheme, currentThemeMode: _themeMode),
     );
@@ -90,13 +91,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _login() async {
     setState(() => _isLoading = true);
-    
+
     // Simulate network delay
     await Future.delayed(const Duration(seconds: 2));
-    
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', true);
-    
+
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
@@ -161,7 +162,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: _isLoading 
+                  child: _isLoading
                       ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Text('Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
@@ -207,10 +208,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
   Future<void> _signUp() async {
     setState(() => _isLoading = true);
     await Future.delayed(const Duration(seconds: 2));
-    
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', true);
-    
+
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
@@ -219,7 +220,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
             currentThemeMode: widget.currentThemeMode,
           ),
         ),
-        (route) => false,
+            (route) => false,
       );
     }
   }
@@ -280,7 +281,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: _isLoading 
+                  child: _isLoading
                       ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Text('Sign Up', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
@@ -297,7 +298,7 @@ class MainNavigationScreen extends StatefulWidget {
   final Function(bool) onThemeChanged;
   final ThemeMode currentThemeMode;
   const MainNavigationScreen({
-    super.key, 
+    super.key,
     required this.onThemeChanged,
     required this.currentThemeMode,
   });
@@ -342,8 +343,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         actions: [
           if (_selectedIndex != 2)
             IconButton(
-              icon: const Icon(Icons.search), 
-              onPressed: () => setState(() => _selectedIndex = 2)
+                icon: const Icon(Icons.search),
+                onPressed: () => setState(() => _selectedIndex = 2)
             ),
           if (_selectedIndex == 1)
             IconButton(icon: const Icon(Icons.sort), onPressed: () {}),
@@ -562,6 +563,13 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   CameraController? _controller;
   bool _isPermissionGranted = false;
   bool _isInitializing = true;
+  FlashMode _flashMode = FlashMode.off;
+  int _cameraIndex = 0;
+  bool _isAutoMode = true;
+  final ImagePicker _picker = ImagePicker();
+
+// store multiple images
+  List<String> capturedImages = [];
 
   @override
   void initState() {
@@ -712,12 +720,13 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                     Row(
                       children: [
                         TextButton.icon(
-                          onPressed: () {},
+                          onPressed: _setAutoMode,
                           icon: const Icon(Icons.hdr_auto, color: Colors.white),
                           label: const Text('AUTO', style: TextStyle(color: Colors.white)),
                         ),
-                        IconButton(icon: const Icon(Icons.flash_off, color: Colors.white), onPressed: () {}),
-                        IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: () {}),
+                        IconButton(icon: Icon(_flashMode == FlashMode.off ? Icons.flash_off : Icons.flash_on, color: _isAutoMode ? Colors.grey : Colors.white,), onPressed: _isAutoMode ? null : _toggleFlash,),
+                        IconButton(icon: const Icon(Icons.cameraswitch, color: Colors.white), onPressed: _switchCamera,),
+                        IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: _openSettings,),
                       ],
                     ),
                 ],
@@ -732,7 +741,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  IconButton(icon: const Icon(Icons.photo_library, color: Colors.white, size: 32), onPressed: () {}),
+                  IconButton(icon: const Icon(Icons.photo_library, color: Colors.white, size: 32), onPressed: _pickMultipleImages,),
                   GestureDetector(
                     onTap: () => _takePicture(),
                     child: Container(
@@ -775,16 +784,118 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
   void _takePicture() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
+
     try {
+      // 👉 If AUTO mode → force flash for capture
+      if (_isAutoMode) {
+        await _controller!.setFlashMode(FlashMode.torch);
+      }
+
       final image = await _controller!.takePicture();
+
+      // 👉 Turn flash OFF again after capture (important)
+      if (_isAutoMode) {
+        await _controller!.setFlashMode(FlashMode.off);
+      }
+
+      setState(() {
+        capturedImages.add(image.path);
+      });
+
       if (mounted) {
-        Navigator.push(context, MaterialPageRoute(builder: (context) => EditorScreen(fileName: 'Scanned Note', imagePath: image.path)));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => EditorScreen(
+              fileName: 'Scanned Notes (${capturedImages.length})',
+              imagePath: image.path,
+            ),
+          ),
+        );
       }
     } catch (e) {
-      debugPrint('Error taking picture: $e');
+      debugPrint("Capture error: $e");
     }
   }
+
+  void _toggleFlash() async {
+    if (_controller == null) return;
+
+    if (_flashMode == FlashMode.off) {
+      _flashMode = FlashMode.torch;
+    } else {
+      _flashMode = FlashMode.off;
+    }
+
+    await _controller!.setFlashMode(_flashMode);
+    setState(() {});
+  }
+
+  void _setAutoMode() async {
+    if (_controller == null) return;
+
+    if (_isAutoMode) {
+      // switch to MANUAL
+      _flashMode = FlashMode.off;
+      await _controller!.setFlashMode(_flashMode);
+    } else {
+      // switch to AUTO flash
+      _flashMode = FlashMode.auto;
+      await _controller!.setFlashMode(_flashMode);
+    }
+
+    setState(() {
+      _isAutoMode = !_isAutoMode;
+    });
+  }
+
+  void _switchCamera() async {
+    if (_cameras.length < 2) return;
+
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+
+    await _controller?.dispose();
+    _initializeCameraController(_cameras[_cameraIndex]);
+  }
+
+  void _pickMultipleImages() async {
+    final images = await _picker.pickMultiImage();
+
+    if (images.isNotEmpty && mounted) {
+      setState(() {
+        capturedImages.addAll(images.map((e) => e.path));
+      });
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => EditorScreen(
+            fileName: 'Selected Images (${images.length})',
+            imagePath: images.last.path,
+          ),
+        ),
+      );
+    }
+  }
+
+  void _openSettings() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Camera Settings'),
+        content: const Text('You can add filters, grid, etc here'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+
 
 class EditorScreen extends StatelessWidget {
   final String fileName;
@@ -833,7 +944,7 @@ class EditorScreen extends StatelessWidget {
 
 class LibraryScreen extends StatelessWidget {
   const LibraryScreen({super.key});
-  
+
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
@@ -857,7 +968,7 @@ class LibraryScreen extends StatelessWidget {
 
 class SearchScreen extends StatelessWidget {
   const SearchScreen({super.key});
-  
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -892,8 +1003,8 @@ class ProfileSettingsScreen extends StatelessWidget {
   final bool isDarkMode;
   final ThemeMode currentThemeMode;
   const ProfileSettingsScreen({
-    super.key, 
-    required this.onThemeChanged, 
+    super.key,
+    required this.onThemeChanged,
     required this.isDarkMode,
     required this.currentThemeMode,
   });
@@ -901,7 +1012,7 @@ class ProfileSettingsScreen extends StatelessWidget {
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', false);
-    
+
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
@@ -910,7 +1021,7 @@ class ProfileSettingsScreen extends StatelessWidget {
             currentThemeMode: currentThemeMode,
           ),
         ),
-        (route) => false,
+            (route) => false,
       );
     }
   }
