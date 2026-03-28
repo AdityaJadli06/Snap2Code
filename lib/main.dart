@@ -605,6 +605,57 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _processImages() async {
+    if (capturedImages.isEmpty) return;
+
+    // 🔥 SHOW LOADING
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    List<String> processedImages = [];
+
+    for (int i = 0; i < capturedImages.length; i++) {
+      String path = capturedImages[i];
+
+      final croppedPath = await cropImage(path);
+      if (croppedPath != null) {
+        processedImages.add(croppedPath);
+      }
+    }
+
+    // 🔍 OCR IN PARALLEL (FAST)
+    List<Future<String>> futures = processedImages
+        .map((path) => extractTextFromImage(path))
+        .toList();
+
+    List<String> results = await Future.wait(futures);
+
+    String finalText = '';
+
+    for (int i = 0; i < results.length; i++) {
+      finalText += "Image ${i + 1}:\n${results[i]}\n\n";
+    }
+
+    if (!mounted) return;
+
+    Navigator.pop(context); // ❗ CLOSE LOADING
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditorScreen(
+          fileName: 'Scanned Notes (${processedImages.length})',
+          imagePath: processedImages.isNotEmpty ? processedImages.last : null,
+          extractedText: finalText,
+        ),
+      ),
+    );
+
+    capturedImages.clear();
+  }
   Future<String> extractTextFromImage(String path) async {
     final inputImage = InputImage.fromFilePath(path);
     final textRecognizer = TextRecognizer();
@@ -750,21 +801,29 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     );
   }
 
-  @override
+  @override@override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
           _buildCameraPreview(),
+
+          /// 🔝 TOP BAR
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => Navigator.pop(context)),
-                  if (_isPermissionGranted && _controller != null && _controller!.value.isInitialized)
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+
+                  if (_isPermissionGranted &&
+                      _controller != null &&
+                      _controller!.value.isInitialized)
                     Row(
                       children: [
                         TextButton.icon(
@@ -780,46 +839,167 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                             ),
                           ),
                         ),
-                        IconButton(icon: Icon(_flashMode == FlashMode.off ? Icons.flash_off : Icons.flash_on, color: _isAutoMode ? Colors.grey : Colors.white,), onPressed: _isAutoMode ? null : _toggleFlash,),
-                        IconButton(icon: const Icon(Icons.cameraswitch, color: Colors.white), onPressed: _switchCamera,),
-                        IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: _openSettings,),
+                        IconButton(
+                          icon: Icon(
+                            _flashMode == FlashMode.off
+                                ? Icons.flash_off
+                                : Icons.flash_on,
+                            color: _isAutoMode ? Colors.grey : Colors.white,
+                          ),
+                          onPressed: _isAutoMode ? null : _toggleFlash,
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.cameraswitch, color: Colors.white),
+                          onPressed: _switchCamera,
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.settings, color: Colors.white),
+                          onPressed: _openSettings,
+                        ),
                       ],
                     ),
                 ],
               ),
             ),
           ),
-          if (_isPermissionGranted && _controller != null && _controller!.value.isInitialized)
+
+          // Count Text
+          if (capturedImages.isNotEmpty)
             Positioned(
-              bottom: 40,
+              bottom: 210,
               left: 0,
               right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  IconButton(icon: const Icon(Icons.photo_library, color: Colors.white, size: 32), onPressed: _pickMultipleImages,),
-                  GestureDetector(
-                    onTap: () => _takePicture(),
-                    child: Container(
-                      height: 80,
-                      width: 80,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 4),
-                      ),
-                      child: Center(
-                        child: Container(
-                          height: 60,
-                          width: 60,
-                          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+              child: Center(
+                child: Text(
+                  "${capturedImages.length} images selected",
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            ),
+
+          //Thumbnail
+          if (capturedImages.isNotEmpty)
+            Positioned(
+              bottom: 120,
+              left: 0,
+              right: 0,
+              child: SizedBox(
+                height: 90,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: capturedImages.length,
+                  itemBuilder: (context, index) {
+                    return Stack(
+                      children: [
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 6),
+                          width: 70,
+                          height: 90,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(capturedImages[index]),
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ),
+
+                        //Delete Button
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                capturedImages.removeAt(index);
+                              });
+                            },
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.black,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.close,
+                                size: 18,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+
+          //Neeche ke Control
+          Positioned(
+            bottom: 40,
+            left: 0,
+            right: 0,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+
+                //Capture Button
+                GestureDetector(
+                  onTap: () => _takePicture(),
+                  child: Container(
+                    height: 80,
+                    width: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 4),
+                    ),
+                    child: Center(
+                      child: Container(
+                        height: 60,
+                        width: 60,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
                         ),
                       ),
                     ),
                   ),
-                  IconButton(icon: const Icon(Icons.history, color: Colors.white, size: 32), onPressed: () {}),
-                ],
-              ),
+                ),
+
+                //Galleryy
+                Positioned(
+                  left: 30,
+                  child: IconButton(
+                    icon: const Icon(Icons.photo_library,
+                        color: Colors.white, size: 32),
+                    onPressed: _pickMultipleImages,
+                  ),
+                ),
+
+                //Next Button
+                Positioned(
+                  right: 30,
+                  child: ElevatedButton(
+                    onPressed:
+                    capturedImages.isEmpty ? null : _processImages,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                    ),
+                    child: const Padding(
+                      padding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: Text(
+                        "Next",
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
         ],
       ),
     );
@@ -827,68 +1007,56 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
   Widget _buildCameraPreview() {
     if (_isInitializing) {
-      return const Center(child: CircularProgressIndicator(color: Colors.white));
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
     }
+
     if (!_isPermissionGranted) {
-      return const Center(child: Text('No camera access', style: TextStyle(color: Colors.white)));
+      return const Center(
+        child: Text('No camera access', style: TextStyle(color: Colors.white)),
+      );
     }
+
     if (_controller == null || !_controller!.value.isInitialized) {
-      return const Center(child: Text('Camera error', style: TextStyle(color: Colors.white)));
+      return const Center(
+        child: Text('Camera error', style: TextStyle(color: Colors.white)),
+      );
     }
-    return CameraPreview(_controller!);
+
+    return ClipRect(
+      child: OverflowBox(
+        alignment: Alignment.center,
+        child: FittedBox(
+          fit: BoxFit.cover, // 🔥 KEY LINE
+          child: SizedBox(
+            width: _controller!.value.previewSize!.height,
+            height: _controller!.value.previewSize!.width,
+            child: CameraPreview(_controller!),
+          ),
+        ),
+      ),
+    );
   }
 
   void _takePicture() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
 
     try {
-
-      // 👉 AUTO: temporarily turn ON flash
       if (_isAutoMode) {
         await _controller!.setFlashMode(FlashMode.torch);
       }
 
       final image = await _controller!.takePicture();
-      //Cropping
-      await Future.delayed(const Duration(milliseconds: 300));
-      final croppedPath = await cropImage(image.path);
-      if (croppedPath == null) {
-        await _controller!.setFlashMode(FlashMode.off);
-        _flashMode = FlashMode.off;
-        return;
-      }
-      // OCR on cropped image
-      String extractedText = await extractTextFromImage(croppedPath);
-
-
-      // 👉 Restore flash properly
-      if (_isAutoMode) {
-        await _controller!.setFlashMode(FlashMode.off);
-        _flashMode = FlashMode.off;
-      } else {
-        // MANUAL → always turn OFF after capture
-        await _controller!.setFlashMode(FlashMode.off);
-        _flashMode = FlashMode.off;
-      }
 
       setState(() {
-        capturedImages.add(croppedPath);
+        capturedImages.add(image.path);
       });
 
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => EditorScreen(
-              fileName: 'Scanned Notes (${capturedImages.length})',
-              imagePath: croppedPath,
-              extractedText: extractedText,
-            ),
-          ),
-        );
-      }
     } catch (e) {
       debugPrint("Capture error: $e");
+    } finally {
+      await _controller?.setFlashMode(FlashMode.off);
     }
   }
 
@@ -908,15 +1076,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   void _setAutoMode() async {
     if (_controller == null) return;
 
-    if (_isAutoMode) {
-      // switch to MANUAL
-      _flashMode = FlashMode.off;
-      await _controller!.setFlashMode(_flashMode);
-    } else {
-      // switch to AUTO flash
-      _flashMode = FlashMode.auto;
-      await _controller!.setFlashMode(_flashMode);
-    }
+    _flashMode = FlashMode.off;
+    await _controller!.setFlashMode(_flashMode);
 
     setState(() {
       _isAutoMode = !_isAutoMode;
@@ -933,35 +1094,14 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   }
 
   void _pickMultipleImages() async {
-    capturedImages.clear();
     final images = await _picker.pickMultiImage();
 
     if (images.isNotEmpty && mounted) {
-
       for (var img in images) {
-        final croppedPath = await cropImage(img.path);
-        if (croppedPath != null) {
-          capturedImages.add(croppedPath);
-        }
+        capturedImages.add(img.path);
       }
 
-      String extractedText = '';
-
-      for (var path in capturedImages) {
-        String text = await extractTextFromImage(path);
-        extractedText += text + "\n\n";
-      }
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => EditorScreen(
-            fileName: 'Selected Images (${capturedImages.length})',
-            imagePath: capturedImages.last,
-            extractedText: extractedText,
-          ),
-        ),
-      );
+      setState(() {});
     }
   }
 
