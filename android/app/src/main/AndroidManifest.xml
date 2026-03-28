@@ -6,6 +6,12 @@
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">
         <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/UCropTheme"
+            android:exported="false"/>
+        <activity
+
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"

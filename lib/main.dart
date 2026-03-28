@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'dart:io';
+import 'package:image_cropper/image_cropper.dart';
 
 late List<CameraDescription> _cameras;
 
@@ -560,6 +563,8 @@ class ScanScreen extends StatefulWidget {
 }
 
 class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
+
+
   CameraController? _controller;
   bool _isPermissionGranted = false;
   bool _isInitializing = true;
@@ -570,6 +575,49 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
 // store multiple images
   List<String> capturedImages = [];
+  //CropFunction
+  Future<String?> cropImage(String path) async {
+    try {
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: path,
+        compressFormat: ImageCompressFormat.jpg,
+        compressQuality: 90,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop',
+            toolbarColor: Colors.black,
+            toolbarWidgetColor: Colors.white,
+            lockAspectRatio: false,
+            hideBottomControls: false,
+
+            // 🔥 ADD THESE
+            cropFrameStrokeWidth: 2,
+            cropGridStrokeWidth: 1,
+            showCropGrid: true,
+          ),
+        ],
+      );
+
+      return croppedFile?.path;
+    } catch (e) {
+      debugPrint("Crop error: $e");
+      return null;
+    }
+  }
+
+  Future<String> extractTextFromImage(String path) async {
+    final inputImage = InputImage.fromFilePath(path);
+    final textRecognizer = TextRecognizer();
+
+    final RecognizedText recognizedText =
+    await textRecognizer.processImage(inputImage);
+
+    String text = recognizedText.text;
+
+    await textRecognizer.close();
+
+    return text;
+  }
 
   @override
   void initState() {
@@ -721,8 +769,16 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                       children: [
                         TextButton.icon(
                           onPressed: _setAutoMode,
-                          icon: const Icon(Icons.hdr_auto, color: Colors.white),
-                          label: const Text('AUTO', style: TextStyle(color: Colors.white)),
+                          icon: Icon(
+                            Icons.hdr_auto,
+                            color: _isAutoMode ? Colors.green : Colors.white,
+                          ),
+                          label: Text(
+                            _isAutoMode ? 'AUTO' : 'MANUAL',
+                            style: TextStyle(
+                              color: _isAutoMode ? Colors.green : Colors.white,
+                            ),
+                          ),
                         ),
                         IconButton(icon: Icon(_flashMode == FlashMode.off ? Icons.flash_off : Icons.flash_on, color: _isAutoMode ? Colors.grey : Colors.white,), onPressed: _isAutoMode ? null : _toggleFlash,),
                         IconButton(icon: const Icon(Icons.cameraswitch, color: Colors.white), onPressed: _switchCamera,),
@@ -786,20 +842,37 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     if (_controller == null || !_controller!.value.isInitialized) return;
 
     try {
-      // 👉 If AUTO mode → force flash for capture
+
+      // 👉 AUTO: temporarily turn ON flash
       if (_isAutoMode) {
         await _controller!.setFlashMode(FlashMode.torch);
       }
 
       final image = await _controller!.takePicture();
+      //Cropping
+      await Future.delayed(const Duration(milliseconds: 300));
+      final croppedPath = await cropImage(image.path);
+      if (croppedPath == null) {
+        await _controller!.setFlashMode(FlashMode.off);
+        _flashMode = FlashMode.off;
+        return;
+      }
+      // OCR on cropped image
+      String extractedText = await extractTextFromImage(croppedPath);
 
-      // 👉 Turn flash OFF again after capture (important)
+
+      // 👉 Restore flash properly
       if (_isAutoMode) {
         await _controller!.setFlashMode(FlashMode.off);
+        _flashMode = FlashMode.off;
+      } else {
+        // MANUAL → always turn OFF after capture
+        await _controller!.setFlashMode(FlashMode.off);
+        _flashMode = FlashMode.off;
       }
 
       setState(() {
-        capturedImages.add(image.path);
+        capturedImages.add(croppedPath);
       });
 
       if (mounted) {
@@ -808,7 +881,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
           MaterialPageRoute(
             builder: (_) => EditorScreen(
               fileName: 'Scanned Notes (${capturedImages.length})',
-              imagePath: image.path,
+              imagePath: croppedPath,
+              extractedText: extractedText,
             ),
           ),
         );
@@ -859,19 +933,32 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   }
 
   void _pickMultipleImages() async {
+    capturedImages.clear();
     final images = await _picker.pickMultiImage();
 
     if (images.isNotEmpty && mounted) {
-      setState(() {
-        capturedImages.addAll(images.map((e) => e.path));
-      });
+
+      for (var img in images) {
+        final croppedPath = await cropImage(img.path);
+        if (croppedPath != null) {
+          capturedImages.add(croppedPath);
+        }
+      }
+
+      String extractedText = '';
+
+      for (var path in capturedImages) {
+        String text = await extractTextFromImage(path);
+        extractedText += text + "\n\n";
+      }
 
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => EditorScreen(
-            fileName: 'Selected Images (${images.length})',
-            imagePath: images.last.path,
+            fileName: 'Selected Images (${capturedImages.length})',
+            imagePath: capturedImages.last,
+            extractedText: extractedText,
           ),
         ),
       );
@@ -897,39 +984,78 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
 
 
-class EditorScreen extends StatelessWidget {
+class EditorScreen extends StatefulWidget {
+  final String? extractedText;
   final String fileName;
   final String? imagePath;
-  const EditorScreen({super.key, required this.fileName, this.imagePath});
+
+  const EditorScreen({
+    super.key,
+    required this.fileName,
+    this.imagePath,
+    this.extractedText,
+  });
+
+  @override
+  State<EditorScreen> createState() => _EditorScreenState();
+}
+
+class _EditorScreenState extends State<EditorScreen> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.extractedText ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(fileName),
+        title: Text(widget.fileName),
         actions: [
-          IconButton(icon: const Icon(Icons.save), onPressed: () {}),
-          IconButton(icon: const Icon(Icons.share), onPressed: () {}),
+          IconButton(
+            icon: const Icon(Icons.save),
+            onPressed: () {
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: () {
+            },
+          ),
         ],
       ),
       body: Column(
         children: [
-          if (imagePath != null)
+          /// IMAGE PREVIEW
+          if (widget.imagePath != null)
             Expanded(
               flex: 1,
               child: Container(
                 width: double.infinity,
                 color: Colors.black12,
-                child: const Icon(Icons.image, size: 50, color: Colors.grey),
+                child: Image.file(File(widget.imagePath!), fit: BoxFit.cover,
+                ),
               ),
             ),
-          const Expanded(
+
+          /// TEXT EDITOR
+          Expanded(
             flex: 2,
             child: Padding(
-              padding: EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(16.0),
               child: TextField(
+                controller: _controller,
                 maxLines: null,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   hintText: 'Recognized text will appear here...',
                   border: InputBorder.none,
                 ),
