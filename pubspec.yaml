@@ -1,4 +1,4 @@
-name: app
+name: Snap2Notes
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -34,16 +34,16 @@ flutter:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
-  image_path: "assets/icons/IMG-20260326-WA0010.jpg"
+  image_path: "assets/icons/1.png"
   min_sdk_android: 21
 
 flutter_native_splash:
   color: "#ffffff"
-  background_image: "assets/icons/IMG-20260326-WA0010.jpg"
+  background_image: "assets/icons/1.png"
   android_gravity: fill
   ios_content_mode: scaleAspectFill
   fullscreen: true
 
   android_12:
-    image: "assets/icons/IMG-20260326-WA0010.jpg"
+    image: "assets/icons/1.png"
     color: "#ffffff"
