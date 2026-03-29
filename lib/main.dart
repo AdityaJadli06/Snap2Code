@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'dart:io';
 import 'package:image_cropper/image_cropper.dart';
+import 'services/api_service.dart';
 
 late List<CameraDescription> _cameras;
 
@@ -29,7 +30,17 @@ Future<void> main() async {
 
   // Check login status
   final prefs = await SharedPreferences.getInstance();
-  final bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+  final String? token = prefs.getString('token');
+
+  bool isLoggedIn = false;
+
+  if (token != null) {
+    isLoggedIn = await ApiService.verifyToken(token);
+
+    if (!isLoggedIn) {
+      await prefs.clear();
+    }
+  }
 
   runApp(Snap2NotesApp(isLoggedIn: isLoggedIn));
   FlutterNativeSplash.remove();
@@ -93,22 +104,45 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
   Future<void> _login() async {
+
+    if (_emailController.text.isEmpty ||
+        _passwordController.text.isEmpty) {
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please enter email and password")),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
 
-    // Simulate network delay
-    await Future.delayed(const Duration(seconds: 2));
+    final result = await ApiService.loginUser(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isLoggedIn', true);
+    setState(() => _isLoading = false);
 
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => MainNavigationScreen(
-            onThemeChanged: widget.onThemeChanged,
-            currentThemeMode: widget.currentThemeMode,
+    if (result["status"] == 200) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', true);
+      await prefs.setString('token', result["data"]["token"]);
+      await prefs.setString('email', result["data"]["email"]);
+      await prefs.setString('name', result["data"]["name"]);
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => MainNavigationScreen(
+              onThemeChanged: widget.onThemeChanged,
+              currentThemeMode: widget.currentThemeMode,
+            ),
           ),
-        ),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result["data"]["message"])),
       );
     }
   }
@@ -156,6 +190,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
+
                 const SizedBox(height: 24),
                 ElevatedButton(
                   onPressed: _isLoading ? null : _login,
@@ -206,24 +241,59 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
 
   Future<void> _signUp() async {
+
+    if (_nameController.text.isEmpty ||
+        _emailController.text.isEmpty ||
+        _passwordController.text.isEmpty ||
+        _confirmPasswordController.text.isEmpty) {
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please fill all fields")),
+      );
+      return;
+    }
+
+    if (_passwordController.text != _confirmPasswordController.text) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Passwords do not match")),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 2));
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isLoggedIn', true);
+    final result = await ApiService.registerUser(
+      email: _emailController.text.trim(),
+      name: _nameController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
 
-    if (mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (context) => MainNavigationScreen(
-            onThemeChanged: widget.onThemeChanged,
-            currentThemeMode: widget.currentThemeMode,
+    setState(() => _isLoading = false);
+
+    if (result["status"] == 200) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', true);
+      await prefs.setString('email', _emailController.text.trim());
+      await prefs.setString('name', _nameController.text.trim());
+
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => MainNavigationScreen(
+              onThemeChanged: widget.onThemeChanged,
+              currentThemeMode: widget.currentThemeMode,
+            ),
           ),
-        ),
-            (route) => false,
+              (route) => false,
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result["data"]["message"])),
       );
     }
   }
@@ -271,6 +341,16 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'Password',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _confirmPasswordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: 'Confirm Password',
                     prefixIcon: const Icon(Icons.lock_outline),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                   ),
@@ -1277,7 +1357,7 @@ class ProfileSettingsScreen extends StatelessWidget {
 
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isLoggedIn', false);
+    await prefs.clear();
 
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -1317,13 +1397,30 @@ class ProfileSettingsScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        const Center(
-          child: Column(
-            children: [
-              Text('User Profile', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              Text('user@example.com', style: TextStyle(color: Colors.grey)),
-            ],
-          ),
+        FutureBuilder(
+          future: SharedPreferences.getInstance(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) return const SizedBox();
+
+            final prefs = snapshot.data!;
+            final name = prefs.getString('name') ?? 'User';
+            final email = prefs.getString('email') ?? '';
+
+            return Center(
+              child: Column(
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    email,
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                ],
+              ),
+            );
+          },
         ),
         const Divider(height: 32),
         SwitchListTile(
