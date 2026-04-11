@@ -54,7 +54,7 @@ Future<void> main() async {
 }
 
 Future<void> _requestInitialPermissions() async {
-  if (kIsWeb) return;
+  if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) return;
 
   Map<Permission, PermissionStatus> statuses = await [
     Permission.camera,
@@ -315,6 +315,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     if (result["status"] == 200) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isLoggedIn', true);
+      await prefs.setString('token', result["data"]["token"] ?? ""); // Store token if available
       await prefs.setString('email', _emailController.text.trim());
       await prefs.setString('name', _nameController.text.trim());
 
@@ -737,6 +738,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadDashboardData() async {
+    if (kIsWeb) {
+      setState(() => _isLoading = false);
+      return;
+    }
     if (!mounted) return;
     setState(() => _isLoading = true);
     try {
@@ -792,6 +797,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _createFolder() async {
+    if (kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Creating folders is not supported on Web.")),
+      );
+      return;
+    }
     String folderName = "";
     await showDialog(
       context: context,
@@ -850,6 +861,29 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (kIsWeb)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(bottom: 24),
+              decoration: BoxDecoration(
+                color: Colors.indigo.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.indigo.withValues(alpha: 0.2)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.indigo),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Web version: Note saving and OCR are currently limited. For the full experience, please use the Android/iOS app.',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           GestureDetector(
             onTap: () async {
               await Navigator.push(context, MaterialPageRoute(builder: (context) => const ScanScreen()));
@@ -964,8 +998,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildRecentNoteCard(BuildContext context, FileSystemEntity file) {
+    if (kIsWeb) return const SizedBox.shrink(); // Safety check for web
+
     final fileName = path.basename(file.path);
-    final modified = (file as File).lastModifiedSync();
+    DateTime modified;
+    try {
+      modified = (file as File).lastModifiedSync();
+    } catch (e) {
+      modified = DateTime.now();
+    }
 
     return GestureDetector(
       onTap: () async {
@@ -974,7 +1015,7 @@ class _HomeScreenState extends State<HomeScreen> {
           MaterialPageRoute(
             builder: (context) => EditorScreen(
               fileName: fileName,
-              extractedText: file.readAsStringSync(),
+              extractedText: (file as File).readAsStringSync(),
             ),
           ),
         );
@@ -1041,8 +1082,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildContinueEditingCard(BuildContext context, File file) {
+    if (kIsWeb) return const SizedBox.shrink();
+
     final fileName = path.basename(file.path);
-    final modified = file.lastModifiedSync();
+    DateTime modified;
+    try {
+      modified = file.lastModifiedSync();
+    } catch (e) {
+      modified = DateTime.now();
+    }
     final difference = DateTime.now().difference(modified);
     String timeAgo = "${difference.inMinutes} mins ago";
     if (difference.inHours > 0) timeAgo = "${difference.inHours} hours ago";
@@ -1120,6 +1168,9 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   List<String> capturedImages = [];
   //CropFunction
   Future<String?> cropImage(String path) async {
+    if (!kIsWeb && !Platform.isAndroid && !Platform.isIOS) {
+      return path; // Cropper only supports Android, iOS and Web
+    }
     try {
       final croppedFile = await ImageCropper().cropImage(
         sourcePath: path,
@@ -1132,12 +1183,16 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
             toolbarWidgetColor: Colors.white,
             lockAspectRatio: false,
             hideBottomControls: false,
-
-            // 🔥 ADD THESE
             cropFrameStrokeWidth: 2,
             cropGridStrokeWidth: 1,
             showCropGrid: true,
           ),
+          if (kIsWeb)
+            WebUiSettings(
+              context: context,
+              presentStyle: WebPresentStyle.dialog,
+              size: const CropperSize(width: 400, height: 400),
+            ),
         ],
       );
 
@@ -1148,6 +1203,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     }
   }
   Future<String> enhanceImage(String path) async {
+    if (kIsWeb) return path;
     final bytes = await File(path).readAsBytes();
     img.Image? image = img.decodeImage(bytes);
 
@@ -1233,6 +1289,19 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     capturedImages.clear();
   }
   Future<String> extractTextFromImage(String path) async {
+    // Use Cloud OCR for Web and Windows
+    if (kIsWeb || (!kIsWeb && Platform.isWindows)) {
+      try {
+        final bytes = kIsWeb 
+            ? await XFile(path).readAsBytes() 
+            : await File(path).readAsBytes();
+        return await ApiService.performCloudOcr(path, bytes);
+      } catch (e) {
+        return "Cloud OCR Error: $e";
+      }
+    }
+
+    // Use Local ML Kit for Android/iOS
     final inputImage = InputImage.fromFilePath(path);
     final textRecognizer = TextRecognizer();
 
@@ -1240,7 +1309,6 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     await textRecognizer.processImage(inputImage);
 
     String text = recognizedText.text;
-
     await textRecognizer.close();
 
     return text;
@@ -1294,6 +1362,17 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkPermissionAndInitialize() async {
+    if (!kIsWeb && !Platform.isAndroid && !Platform.isIOS) {
+      setState(() {
+        _isPermissionGranted = true;
+      });
+      if (_cameras.isNotEmpty) {
+        _initializeCameraController(_cameras[0]);
+      } else {
+        setState(() => _isInitializing = false);
+      }
+      return;
+    }
     final status = await Permission.camera.status;
     if (status.isGranted) {
       setState(() {
@@ -1494,10 +1573,9 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                           height: 90,
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.file(
-                              File(capturedImages[index]),
-                              fit: BoxFit.cover,
-                            ),
+                            child: kIsWeb 
+                              ? Image.network(capturedImages[index], fit: BoxFit.cover)
+                              : Image.file(File(capturedImages[index]), fit: BoxFit.cover),
                           ),
                         ),
 
@@ -1618,6 +1696,15 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     if (_controller == null || !_controller!.value.isInitialized) {
       return const Center(
         child: Text('Camera error', style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    if (kIsWeb) {
+      return Center(
+        child: AspectRatio(
+          aspectRatio: _controller!.value.aspectRatio,
+          child: CameraPreview(_controller!),
+        ),
       );
     }
 
@@ -1798,7 +1885,11 @@ class _EditorScreenState extends State<EditorScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.save),
-            onPressed: () async {
+            onPressed: kIsWeb ? () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Saving notes to local storage is not supported on Web.")),
+              );
+            } : () async {
               final directory = await getApplicationDocumentsDirectory();
               final snapPath = path.join(directory.path, "Snap2notes");
               final snapDir = Directory(snapPath);
@@ -1946,7 +2037,9 @@ class _EditorScreenState extends State<EditorScreen> {
           if (widget.imagePath != null)
             Expanded(
               flex: 1,
-              child: Image.file(File(widget.imagePath!), fit: BoxFit.cover),
+              child: kIsWeb 
+                ? Image.network(widget.imagePath!, fit: BoxFit.cover)
+                : Image.file(File(widget.imagePath!), fit: BoxFit.cover),
             ),
 
           /// TEXT
@@ -2023,6 +2116,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _initStorage() async {
+    if (kIsWeb) {
+      setState(() => _isLoading = false);
+      return;
+    }
     setState(() => _isLoading = true);
     final directory = await getApplicationDocumentsDirectory();
     final snapPath = path.join(directory.path, "Snap2notes");
@@ -2050,6 +2147,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _createFolder() async {
+    if (kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Creating folders is not supported on Web.")),
+      );
+      return;
+    }
     String folderName = "";
     await showDialog(
       context: context,
@@ -2161,7 +2264,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               MaterialPageRoute(
                                 builder: (context) => EditorScreen(
                                   fileName: path.basename(item.path),
-                                  extractedText: (item as File).readAsStringSync(),
+                                  extractedText: item is File ? item.readAsStringSync() : '',
                                 ),
                               ),
                             ).then((_) => _loadItems());

@@ -10,7 +10,7 @@ class ApiService {
   static Future<String?> getYoutubeVideo(String query) async {
     final url = Uri.parse(
       "https://www.googleapis.com/youtube/v3/search"
-          "?part=snippet&type=video&maxResults=1&q=$query&key=SMALLAPI",
+          "?part=snippet&type=video&maxResults=1&q=$query&key=AIzaSyBbw-r0ER2TxylvboYJKz2Ae-qcxwAlDY4",
     );
 
     final response = await http.get(url);
@@ -32,7 +32,8 @@ class ApiService {
         url,
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "Bearer sk-or-v1-BIGAPI",
+          "Accept": "application/json",
+          "Authorization": "Bearer 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",
         },
         body: jsonEncode({
           "model": "openai/gpt-3.5-turbo",
@@ -115,6 +116,46 @@ $text
       return "Exception: $e";
     }
   }
+
+  static Future<String> performCloudOcr(String imagePath, List<int> imageBytes) async {
+    final url = Uri.parse("https://openrouter.ai/api/v1/chat/completions");
+
+    try {
+      final base64Image = base64Encode(imageBytes);
+      final response = await http.post(
+        url,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer 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",
+        },
+        body: jsonEncode({
+          "model": "google/gemini-flash-1.5-8b", // Cheap and fast for OCR
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {"type": "text", "text": "Extract all text from this image. Only return the text found, nothing else."},
+                {
+                  "type": "image_url",
+                  "image_url": {"url": "data:image/jpeg;base64,$base64Image"}
+                }
+              ]
+            }
+          ]
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data["choices"] != null) {
+        return data["choices"][0]["message"]["content"];
+      } else {
+        return "Cloud OCR Error: ${response.body}";
+      }
+    } catch (e) {
+      return "Cloud OCR Exception: $e";
+    }
+  }
+
   static const String baseUrl =
       "https://bbqvamxf5dlexddyt4dsy7je3y0wjhop.lambda-url.us-east-1.on.aws/";
 
@@ -130,6 +171,7 @@ $text
         url,
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json",
         },
         body: jsonEncode({
           "email": email,
@@ -138,19 +180,29 @@ $text
         }),
       );
 
-      final data = jsonDecode(response.body);
+      print("Register Status: ${response.statusCode}");
+      print("Register Response: ${response.body}");
+
+      dynamic data;
+      try {
+        data = jsonDecode(response.body);
+      } catch (e) {
+        data = {"message": response.body};
+      }
 
       return {
         "status": response.statusCode,
         "data": data,
       };
     } catch (e) {
+      print("Register Exception: $e");
       return {
         "status": 500,
-        "data": {"message": "Network error"},
+        "data": {"message": "Network error: $e"},
       };
     }
   }
+
   static Future<Map<String, dynamic>> loginUser({
     required String email,
     required String password,
@@ -164,6 +216,7 @@ $text
         url,
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json",
         },
         body: jsonEncode({
           "email": email,
@@ -171,16 +224,25 @@ $text
         }),
       );
 
-      final data = jsonDecode(response.body);
+      print("Login Status: ${response.statusCode}");
+      print("Login Response: ${response.body}");
+
+      dynamic data;
+      try {
+        data = jsonDecode(response.body);
+      } catch (e) {
+        data = {"message": response.body};
+      }
 
       return {
         "status": response.statusCode,
         "data": data,
       };
     } catch (e) {
+      print("Login Exception: $e");
       return {
         "status": 500,
-        "data": {"message": "Network error"},
+        "data": {"message": "Network error: $e"},
       };
     }
   }
@@ -194,11 +256,13 @@ $text
         url,
         headers: {
           "Authorization": "Bearer $token",
+          "Accept": "application/json",
         },
       );
 
       return response.statusCode == 200;
     } catch (e) {
+      print("VerifyToken Exception: $e");
       return false;
     }
   }
