@@ -266,15 +266,22 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     }
 
     setState(() => _isLoading = true);
-    // Simulating API call
-    await Future.delayed(const Duration(seconds: 2));
+    
+    final result = await ApiService.resetPassword(_emailController.text.trim());
+
     setState(() => _isLoading = false);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Password reset link sent to your email")),
-      );
-      Navigator.pop(context);
+      if (result["status"] == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Password reset link sent to your email")),
+        );
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result["data"]["message"])),
+        );
+      }
     }
   }
 

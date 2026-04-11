@@ -90,4 +90,22 @@ class ApiService {
       return false;
     }
   }
+
+  static Future<Map<String, dynamic>> resetPassword(String email) async {
+    // This is currently a simulated endpoint as it's not yet available on the backend
+    await Future.delayed(const Duration(seconds: 2));
+    
+    // Logic to simulate success/failure
+    if (email.contains('@')) {
+      return {
+        "status": 200,
+        "data": {"message": "Success"}
+      };
+    } else {
+      return {
+        "status": 400,
+        "data": {"message": "Invalid email address"}
+      };
+    }
+  }
 }
