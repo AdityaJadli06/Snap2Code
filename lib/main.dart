@@ -766,6 +766,10 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
   CameraController? _controller;
   bool _isPermissionGranted = false;
+  double _currentZoom = 1.0;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  double _baseZoom = 1.0;
   bool _isInitializing = true;
   FlashMode _flashMode = FlashMode.off;
   int _cameraIndex = 0;
@@ -835,7 +839,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     String finalText = '';
 
     for (int i = 0; i < results.length; i++) {
-      finalText += "Image ${i + 1}:\n${results[i]}\n\n";
+      finalText += "📄 Page ${i + 1}\n\n${results[i]}\n\n";
     }
 
     if (!mounted) return;
@@ -862,13 +866,31 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     final RecognizedText recognizedText =
     await textRecognizer.processImage(inputImage);
 
-    String text = recognizedText.text;
+    String text = '';
+
+    // ✅ Structured extraction (blocks + lines)
+    for (TextBlock block in recognizedText.blocks) {
+      for (TextLine line in block.lines) {
+        text += line.text.trim() + '\n';
+      }
+      text += '\n'; // space between paragraphs
+    }
 
     await textRecognizer.close();
 
+    // ✅ Clean text
+    text = cleanText(text);
+
     return text;
   }
-
+  String cleanText(String text) {
+    return text
+        .replaceAll(RegExp(r'[ \t]+'), ' ')        // remove extra spaces
+        .replaceAll(RegExp(r'\n\s+'), '\n')        // fix line breaks
+        .replaceAll(RegExp(r'[^\w\s\n.,]'), '')    // remove weird symbols
+        .replaceAll(RegExp(r'\n{2,}'), '\n\n')     // limit multiple newlines
+        .trim();
+  }
   @override
   void initState() {
     super.initState();
@@ -970,6 +992,9 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     });
     try {
       await cameraController.initialize();
+      _minZoom = await cameraController.getMinZoomLevel();
+      _maxZoom = await cameraController.getMaxZoomLevel();
+      _currentZoom = _minZoom;
     } on CameraException catch (e) {
       debugPrint('Camera exception $e');
     }
@@ -1231,7 +1256,22 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
           child: SizedBox(
             width: _controller!.value.previewSize!.height,
             height: _controller!.value.previewSize!.width,
-            child: CameraPreview(_controller!),
+            child: GestureDetector(
+              onScaleStart: (details) {
+                _baseZoom = _currentZoom;
+              },
+              onScaleUpdate: (details) async {
+                double zoom = _baseZoom + (details.scale - 1) * 2;
+                zoom = zoom.clamp(_minZoom, _maxZoom);
+
+                await _controller!.setZoomLevel(zoom);
+
+                setState(() {
+                  _currentZoom = zoom;
+                });
+              },
+              child: CameraPreview(_controller!),
+            ),
           ),
         ),
       ),
