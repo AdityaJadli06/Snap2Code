@@ -32,7 +32,7 @@ class ApiService {
         url,
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "xxxx",
+          "Authorization": "Bearer xxxx",
         },
         body: jsonEncode({
           "model": "openai/gpt-3.5-turbo",
