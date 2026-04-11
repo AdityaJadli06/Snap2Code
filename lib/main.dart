@@ -6,6 +6,7 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'dart:convert';
 import 'dart:io';
 import 'package:image_cropper/image_cropper.dart';
 import 'services/api_service.dart';
@@ -1847,6 +1848,7 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
+  List<String> _currentVideoLinks = [];
 
   Future<void> _generateNotes() async {
     final rawText = _controller.text;
@@ -1860,12 +1862,14 @@ class _EditorScreenState extends State<EditorScreen> {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
-    final notes = await ApiService.generateNotes(rawText);
+    final resultJson = await ApiService.generateNotes(rawText);
+    final result = jsonDecode(resultJson);
 
     Navigator.pop(context); // close loading
 
     setState(() {
-      _controller.text = notes;
+      _controller.text = result["notes"];
+      _currentVideoLinks = List<String>.from(result["videos"]);
     });
   }
   late TextEditingController _controller;
@@ -1874,6 +1878,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.extractedText ?? '');
+    _currentVideoLinks = widget.videoLinks ?? [];
   }
 
   @override
@@ -2021,6 +2026,7 @@ class _EditorScreenState extends State<EditorScreen> {
                             email: email!,
                             title: finalFileName,
                             content: _controller.text,
+                            videos: _currentVideoLinks,
                           );
                           Navigator.pop(context);
                           if (mounted) {
@@ -2078,19 +2084,34 @@ class _EditorScreenState extends State<EditorScreen> {
 
 
           /// VIDEOS
-          if (widget.videoLinks != null && widget.videoLinks!.isNotEmpty)
+          if (_currentVideoLinks.isNotEmpty)
             SizedBox(
               height: 150,
               child: ListView(
-                children: widget.videoLinks!.map((link) {
+                children: _currentVideoLinks.map((link) {
                   return ListTile(
-                    leading: const Icon(Icons.play_circle),
-                    title: const Text("Watch Explanation"),
+                    leading: const Icon(Icons.play_circle, color: Colors.red),
+                    title: const Text("Watch Explanation", style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
                     subtitle: Text(link),
                     onTap: () async {
-                      final uri = Uri.parse(link);
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(uri);
+                      final uri = Uri.parse(link.trim());
+                      try {
+                        if (await canLaunchUrl(uri)) {
+                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        } else {
+                          // Fallback if the first attempt fails
+                          await launchUrl(uri, mode: LaunchMode.platformDefault);
+                        }
+                      } catch (e) {
+                        print("Error launching URL: $e");
+                        // Final fallback attempt
+                        try {
+                           await launchUrl(uri, mode: LaunchMode.inAppWebView);
+                        } catch (e2) {
+                           ScaffoldMessenger.of(context).showSnackBar(
+                             SnackBar(content: Text("Could not launch video: $link")),
+                           );
+                        }
                       }
                     },
                   );

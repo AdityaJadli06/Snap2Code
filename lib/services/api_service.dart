@@ -40,30 +40,40 @@ class ApiService {
     required String email,
     required String title,
     required String content,
+    required List<String> videos,
   }) async {
     return await saveNoteToCloud(
       userId: email,
       title: title,
       content: content,
-      videos: [],
+      videos: videos,
     );
   }
 
-  static Future<String?> getYoutubeVideo(String query) async {
+  static Future<List<String>> getYoutubeVideos(String query) async {
     final url = Uri.parse(
       "https://www.googleapis.com/youtube/v3/search"
-          "?part=snippet&type=video&maxResults=1&q=$query&key=xxx",
+          "?part=snippet&type=video&maxResults=3&q=$query&key=small",
     );
 
-    final response = await http.get(url);
-    final data = jsonDecode(response.body);
+    try {
+      final response = await http.get(url);
+      final data = jsonDecode(response.body);
 
-    if (data["items"] != null && data["items"].length > 0) {
-      final videoId = data["items"][0]["id"]["videoId"];
-      return "https://www.youtube.com/watch?v=$videoId";
+      List<String> videoLinks = [];
+      if (data["items"] != null) {
+        for (var item in data["items"]) {
+          final videoId = item["id"]["videoId"];
+          if (videoId != null) {
+            videoLinks.add("https://www.youtube.com/watch?v=$videoId");
+          }
+        }
+      }
+      return videoLinks;
+    } catch (e) {
+      print("YouTube API Error: $e");
+      return [];
     }
-
-    return null;
   }
 
 
@@ -78,7 +88,7 @@ class ApiService {
         headers: {
           "Content-Type": "application/json",
           "Accept": "application/json",
-          "Authorization": "Bearer sk-or-v1-xxx",
+          "Authorization": "Bearer sk-or-v1-big",
         },
         body: jsonEncode({
           "model": "openai/gpt-3.5-turbo",
@@ -147,18 +157,60 @@ $text
         }),
       );
 
-      print("STATUS: ${response.statusCode}");
-      print("BODY: ${response.body}");
-
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200 && data["choices"] != null) {
-        return data["choices"][0]["message"]["content"];
+        String content = data["choices"][0]["message"]["content"];
+        
+        // Find all headings (Main # and Subtopics @)
+        RegExp headingRegExp = RegExp(r'^[#@]\s*(.+)$', multiLine: true);
+        Iterable<RegExpMatch> matches = headingRegExp.allMatches(content);
+        
+        List<String> allVideos = [];
+        String finalContent = "";
+        int lastIndex = 0;
+
+        for (var match in matches) {
+          // Add the content before this heading
+          finalContent += content.substring(lastIndex, match.start);
+          
+          String headingText = match.group(0)!;
+          String topicName = match.group(1)!;
+          
+          finalContent += "$headingText\n";
+          
+          // Fetch videos for this specific heading
+          List<String> videos = await getYoutubeVideos(topicName);
+          if (videos.isNotEmpty) {
+            finalContent += "\n! Recommended Videos for $topicName:\n";
+            for (var v in videos) {
+              finalContent += "! $v\n";
+              allVideos.add(v);
+            }
+            finalContent += "\n";
+          }
+          
+          lastIndex = match.end;
+        }
+        
+        // Add remaining content
+        finalContent += content.substring(lastIndex);
+        
+        return jsonEncode({
+          "notes": finalContent,
+          "videos": allVideos
+        });
       } else {
-        return "API Error: ${data.toString()}";
+        return jsonEncode({
+          "notes": "API Error: ${data.toString()}",
+          "videos": []
+        });
       }
     } catch (e) {
-      return "Exception: $e";
+      return jsonEncode({
+        "notes": "Exception: $e",
+        "videos": []
+      });
     }
   }
 
