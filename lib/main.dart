@@ -12,6 +12,7 @@ import 'services/api_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:image/image.dart' as img;
 
 late List<CameraDescription> _cameras;
 
@@ -1146,6 +1147,32 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       return path;
     }
   }
+  Future<String> enhanceImage(String path) async {
+    final bytes = await File(path).readAsBytes();
+    img.Image? image = img.decodeImage(bytes);
+
+    if (image == null) return path;
+
+    // 1. Grayscale
+    image = img.grayscale(image);
+
+    // 2. Increase contrast
+    image = img.adjustColor(image, contrast: 1.5);
+
+    // 3. Sharpen
+    image = img.convolution(image, filter: [
+      0, -1, 0,
+      -1, 5, -1,
+      0, -1, 0
+    ]);
+
+    final newPath = path.replaceAll(".jpg", "_enhanced.jpg");
+    final newFile = File(newPath);
+
+    await newFile.writeAsBytes(img.encodeJpg(image));
+
+    return newPath;
+  }
 
   void _processImages() async {
     if (capturedImages.isEmpty) return;
@@ -1163,8 +1190,10 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       String path = capturedImages[i];
 
       final croppedPath = await cropImage(path);
+
       if (croppedPath != null) {
-        processedImages.add(croppedPath);
+        final enhancedPath = await enhanceImage(croppedPath);
+        processedImages.add(enhancedPath);
       }
     }
 

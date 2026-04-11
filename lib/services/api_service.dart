@@ -10,7 +10,7 @@ class ApiService {
   static Future<String?> getYoutubeVideo(String query) async {
     final url = Uri.parse(
       "https://www.googleapis.com/youtube/v3/search"
-          "?part=snippet&type=video&maxResults=1&q=$query&key=xxxx",
+          "?part=snippet&type=video&maxResults=1&q=$query&key=SMALLAPI",
     );
 
     final response = await http.get(url);
@@ -32,7 +32,7 @@ class ApiService {
         url,
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "Bearer xxxx",
+          "Authorization": "Bearer sk-or-v1-BIGAPI",
         },
         body: jsonEncode({
           "model": "openai/gpt-3.5-turbo",
