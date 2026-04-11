@@ -10,12 +10,17 @@ import 'dart:io';
 import 'package:image_cropper/image_cropper.dart';
 import 'services/api_service.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 
 late List<CameraDescription> _cameras;
 
 Future<void> main() async {
   WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+
+  // Request permissions on first launch
+  await _requestInitialPermissions();
 
   // Initialize cameras
   try {
@@ -45,6 +50,20 @@ Future<void> main() async {
 
   runApp(Snap2NotesApp(isLoggedIn: isLoggedIn));
   FlutterNativeSplash.remove();
+}
+
+Future<void> _requestInitialPermissions() async {
+  if (kIsWeb) return;
+
+  Map<Permission, PermissionStatus> statuses = await [
+    Permission.camera,
+    Permission.storage,
+    // For Android 13+ support
+    Permission.photos,
+    Permission.videos,
+  ].request();
+
+  debugPrint("Permissions statuses: $statuses");
 }
 
 class Snap2NotesApp extends StatefulWidget {
@@ -604,18 +623,26 @@ class MainNavigationScreen extends StatefulWidget {
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _selectedIndex = 0;
+  final GlobalKey<_HomeScreenState> _homeKey = GlobalKey<_HomeScreenState>();
+  final GlobalKey<_LibraryScreenState> _libraryKey = GlobalKey<_LibraryScreenState>();
 
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
     });
+    // Refresh the screen being switched to
+    if (index == 0) {
+      _homeKey.currentState?._loadDashboardData();
+    } else if (index == 1) {
+      _libraryKey.currentState?._loadItems();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      const HomeScreen(),
-      const LibraryScreen(),
+      HomeScreen(key: _homeKey),
+      LibraryScreen(key: _libraryKey),
       const SearchScreen(),
       ProfileSettingsScreen(
         onThemeChanged: widget.onThemeChanged,
@@ -678,18 +705,144 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 }
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  List<FileSystemEntity> _recentFiles = [];
+  List<Directory> _folders = [];
+  File? _lastEditedFile;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboardData();
+  }
+
+  Future<void> _loadDashboardData() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final snapPath = path.join(directory.path, "Snap2notes");
+      final snapDir = Directory(snapPath);
+
+      if (!await snapDir.exists()) {
+        await snapDir.create(recursive: true);
+      }
+
+      // Check if directory exists before listing
+      if (await snapDir.exists()) {
+        final allItems = snapDir.listSync(recursive: true);
+
+        // Folders (Subjects)
+        _folders = allItems
+            .whereType<Directory>()
+            .where((d) => d.existsSync() && path.dirname(d.path) == snapPath)
+            .toList();
+
+        // Files
+        final files = allItems
+            .whereType<File>()
+            .where((f) => f.existsSync() && f.path.endsWith('.txt'))
+            .toList();
+
+        // Sort by last modified - wrap in try/catch for safety
+        files.sort((a, b) {
+          try {
+            return b.lastModifiedSync().compareTo(a.lastModifiedSync());
+          } catch (e) {
+            return 0;
+          }
+        });
+
+        _recentFiles = files.take(5).toList();
+        if (files.isNotEmpty) {
+          _lastEditedFile = files.first;
+        } else {
+          _lastEditedFile = null;
+        }
+      }
+    } catch (e) {
+      debugPrint("Error loading dashboard: $e");
+      _folders = [];
+      _recentFiles = [];
+      _lastEditedFile = null;
+    }
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _createFolder() async {
+    String folderName = "";
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New Subject Folder'),
+        content: TextField(
+          onChanged: (value) => folderName = value,
+          decoration: const InputDecoration(hintText: "Enter subject name"),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              if (folderName.isNotEmpty) {
+                try {
+                  final directory = await getApplicationDocumentsDirectory();
+                  final snapPath = path.join(directory.path, "Snap2notes");
+                  final snapDir = Directory(snapPath);
+                  
+                  // Ensure parent Snap2notes exists first
+                  if (!await snapDir.exists()) {
+                    await snapDir.create(recursive: true);
+                  }
+
+                  final newDir = Directory(path.join(snapPath, folderName));
+                  if (!await newDir.exists()) {
+                    await newDir.create(recursive: true);
+                    _loadDashboardData();
+                  }
+                } catch (e) {
+                  debugPrint("Error creating folder: $e");
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("Error: $e")),
+                    );
+                  }
+                }
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           GestureDetector(
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ScanScreen())),
+            onTap: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (context) => const ScanScreen()));
+              _loadDashboardData();
+            },
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 30),
@@ -725,58 +878,96 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 32),
-          _buildSectionHeader('Recent Notes', () {}),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 170,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: 4,
-              separatorBuilder: (context, index) => const SizedBox(width: 12),
-              itemBuilder: (context, index) {
-                return _buildRecentNoteCard(context, index);
-              },
+          if (_recentFiles.isNotEmpty) ...[
+            _buildSectionHeader('Recent Notes', () {}),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 170,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _recentFiles.length,
+                separatorBuilder: (context, index) => const SizedBox(width: 12),
+                itemBuilder: (context, index) {
+                  return _buildRecentNoteCard(context, _recentFiles[index]);
+                },
+              ),
             ),
-          ),
-          const SizedBox(height: 32),
-          _buildSectionHeader('Subjects / Folders', () {}),
+            const SizedBox(height: 32),
+          ],
+          
+          _buildSectionHeader('Subjects / Folders', _createFolder, actionIcon: Icons.add),
           const SizedBox(height: 12),
-          GridView.count(
-            crossAxisCount: 2,
+          _folders.isEmpty 
+              ? Center(
+                  child: TextButton.icon(
+                    onPressed: _createFolder,
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    label: const Text("Create your first subject folder"),
+                  ),
+                )
+              : GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 2.2,
-            children: [
-              _buildCategoryItem(Icons.functions, 'Mathematics', Colors.blue),
-              _buildCategoryItem(Icons.science_outlined, 'Physics', Colors.orange),
-              _buildCategoryItem(Icons.biotech_outlined, 'Biology', Colors.green),
-              _buildCategoryItem(Icons.history_edu, 'History', Colors.brown),
-            ],
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 2.2,
+            ),
+            itemCount: _folders.length,
+            itemBuilder: (context, index) {
+              return _buildCategoryItem(_folders[index]);
+            },
           ),
           const SizedBox(height: 32),
-          _buildSectionHeader('Continue Editing', () {}),
-          const SizedBox(height: 12),
-          _buildContinueEditingCard(context),
+          
+          if (_lastEditedFile != null) ...[
+            _buildSectionHeader('Continue Editing', () {}),
+            const SizedBox(height: 12),
+            _buildContinueEditingCard(context, _lastEditedFile!),
+          ],
+          if (_recentFiles.isEmpty && _folders.isEmpty)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Text("No notes yet. Start scanning!", style: TextStyle(color: Colors.grey)),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildSectionHeader(String title, VoidCallback onSeeAll) {
+  Widget _buildSectionHeader(String title, VoidCallback onAction, {IconData? actionIcon}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        TextButton(onPressed: onSeeAll, child: const Text('See All')),
+        if (actionIcon != null)
+          IconButton(onPressed: onAction, icon: Icon(actionIcon, size: 20, color: Colors.indigo))
+        else
+          TextButton(onPressed: onAction, child: const Text('See All')),
       ],
     );
   }
 
-  Widget _buildRecentNoteCard(BuildContext context, int index) {
+  Widget _buildRecentNoteCard(BuildContext context, FileSystemEntity file) {
+    final fileName = path.basename(file.path);
+    final modified = (file as File).lastModifiedSync();
+    
     return GestureDetector(
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const EditorScreen(fileName: 'Algebra Lecture'))),
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => EditorScreen(
+              fileName: fileName,
+              extractedText: file.readAsStringSync(),
+            ),
+          ),
+        );
+        _loadDashboardData();
+      },
       child: Container(
         width: 150,
         decoration: BoxDecoration(
@@ -795,36 +986,49 @@ class HomeScreen extends StatelessWidget {
                 color: Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(Icons.image_outlined, color: Colors.grey.shade400, size: 40),
+              child: Icon(Icons.description_outlined, color: Colors.indigo.shade200, size: 40),
             ),
             const SizedBox(height: 8),
-            Text('Lecture ${index + 1}', maxLines: 1, style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('Oct ${20 - index}, 2023', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            Text(fileName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('${modified.day}/${modified.month}/${modified.year}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCategoryItem(IconData icon, String label, Color color) {
+  Widget _buildCategoryItem(Directory folder) {
     return Container(
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: Colors.indigo.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
+        border: Border.all(color: Colors.indigo.withValues(alpha: 0.2)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color),
+          const Icon(Icons.folder, color: Colors.amber),
           const SizedBox(width: 8),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+          Flexible(
+            child: Text(
+              path.basename(folder.path),
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildContinueEditingCard(BuildContext context) {
+  Widget _buildContinueEditingCard(BuildContext context, File file) {
+    final fileName = path.basename(file.path);
+    final modified = file.lastModifiedSync();
+    final difference = DateTime.now().difference(modified);
+    String timeAgo = "${difference.inMinutes} mins ago";
+    if (difference.inHours > 0) timeAgo = "${difference.inHours} hours ago";
+    if (difference.inDays > 0) timeAgo = "${difference.inDays} days ago";
+
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -838,10 +1042,21 @@ class HomeScreen extends StatelessWidget {
           decoration: BoxDecoration(color: Colors.indigo.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
           child: const Icon(Icons.edit_note, color: Colors.indigo),
         ),
-        title: const Text('Thermodynamics Notes.docx', style: TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: const Text('Last edited 20 mins ago'),
+        title: Text(fileName, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('Last edited $timeAgo'),
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const EditorScreen(fileName: 'Thermodynamics Notes'))),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => EditorScreen(
+                fileName: fileName,
+                extractedText: file.readAsStringSync(),
+              ),
+            ),
+          );
+          _loadDashboardData();
+        },
       ),
     );
   }
@@ -954,17 +1169,19 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
     Navigator.pop(context); // ❗ CLOSE LOADING
 
+    final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => EditorScreen(
-          fileName: 'Scanned Notes (${processedImages.length})',
+          fileName: 'Scanned_$timestamp',
           imagePath: processedImages.isNotEmpty ? processedImages.last : null,
           extractedText: finalText,
-
         ),
       ),
-    );
+    ).then((_) {
+      // Refresh logic if needed, but usually handled by pop or the home screen refresh
+    });
 
     capturedImages.clear();
   }
@@ -1534,7 +1751,68 @@ class _EditorScreenState extends State<EditorScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.save),
-            onPressed: () {
+            onPressed: () async {
+              final directory = await getApplicationDocumentsDirectory();
+              final snapPath = path.join(directory.path, "Snap2notes");
+              final snapDir = Directory(snapPath);
+              if (!await snapDir.exists()) {
+                await snapDir.create(recursive: true);
+              }
+
+              // Load available folders
+              final items = snapDir.listSync();
+              final folders = items.whereType<Directory>().toList();
+
+              if (!mounted) return;
+
+              String selectedFolder = snapPath;
+
+              await showDialog(
+                context: context,
+                builder: (context) => StatefulBuilder(
+                  builder: (context, setDialogState) => AlertDialog(
+                    title: const Text('Save to Subject'),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ListTile(
+                          title: const Text("Main Folder (Snap2notes)"),
+                          leading: Radio<String>(
+                            value: snapPath,
+                            groupValue: selectedFolder,
+                            onChanged: (val) => setDialogState(() => selectedFolder = val!),
+                          ),
+                        ),
+                        ...folders.map((folder) => ListTile(
+                          title: Text(path.basename(folder.path)),
+                          leading: Radio<String>(
+                            value: folder.path,
+                            groupValue: selectedFolder,
+                            onChanged: (val) => setDialogState(() => selectedFolder = val!),
+                          ),
+                        )),
+                      ],
+                    ),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                      TextButton(
+                        onPressed: () async {
+                          final filePath = path.join(selectedFolder, "${widget.fileName.replaceAll('.txt', '')}.txt");
+                          final file = File(filePath);
+                          await file.writeAsString(_controller.text);
+                          Navigator.pop(context);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Saved successfully")),
+                            );
+                          }
+                        },
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
             },
           ),
           IconButton(
@@ -1601,26 +1879,180 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 }
 
-class LibraryScreen extends StatelessWidget {
+class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: 5,
-      itemBuilder: (context, index) {
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: const Icon(Icons.folder, color: Colors.amber),
-            title: Text('Subject ${index + 1}'),
-            subtitle: Text('${(index + 2) * 3} notes'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {},
+  State<LibraryScreen> createState() => _LibraryScreenState();
+}
+
+class _LibraryScreenState extends State<LibraryScreen> {
+  List<FileSystemEntity> _items = [];
+  String _currentPath = "";
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _initStorage();
+  }
+
+  Future<void> _initStorage() async {
+    setState(() => _isLoading = true);
+    final directory = await getApplicationDocumentsDirectory();
+    final snapPath = path.join(directory.path, "Snap2notes");
+    final snapDir = Directory(snapPath);
+    if (!await snapDir.exists()) {
+      await snapDir.create(recursive: true);
+    }
+    _currentPath = snapPath;
+    _loadItems();
+  }
+
+  void _loadItems() {
+    final dir = Directory(_currentPath);
+    if (!dir.existsSync()) {
+      setState(() {
+        _items = [];
+        _isLoading = false;
+      });
+      return;
+    }
+    setState(() {
+      _items = dir.listSync().toList();
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _createFolder() async {
+    String folderName = "";
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New Folder'),
+        content: TextField(
+          onChanged: (value) => folderName = value,
+          decoration: const InputDecoration(hintText: "Enter folder name"),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              if (folderName.isNotEmpty) {
+                final newDir = Directory(path.join(_currentPath, folderName));
+                if (!await newDir.exists()) {
+                  await newDir.create();
+                  _loadItems();
+                }
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Create'),
           ),
-        );
-      },
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteItem(FileSystemEntity item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete'),
+        content: Text('Are you sure you want to delete ${path.basename(item.path)}?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      if (item is Directory) {
+        await item.delete(recursive: true);
+      } else {
+        await item.delete();
+      }
+      _loadItems();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Scaffold(
+      body: Column(
+        children: [
+          FutureBuilder<Directory>(
+            future: getApplicationDocumentsDirectory(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) return const SizedBox();
+              final rootSnapPath = path.join(snapshot.data!.path, "Snap2notes");
+              if (_currentPath != rootSnapPath) {
+                return ListTile(
+                  leading: const Icon(Icons.arrow_upward),
+                  title: const Text(".."),
+                  onTap: () {
+                    setState(() {
+                      _currentPath = Directory(_currentPath).parent.path;
+                      _loadItems();
+                    });
+                  },
+                );
+              }
+              return const SizedBox();
+            },
+          ),
+          Expanded(
+            child: _items.isEmpty
+                ? const Center(child: Text("Empty"))
+                : ListView.builder(
+                    itemCount: _items.length,
+                    itemBuilder: (context, index) {
+                      final item = _items[index];
+                      final isFolder = item is Directory;
+                      return ListTile(
+                        leading: Icon(
+                          isFolder ? Icons.folder : Icons.insert_drive_file,
+                          color: isFolder ? Colors.amber : Colors.blue,
+                        ),
+                        title: Text(path.basename(item.path)),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.red),
+                          onPressed: () => _deleteItem(item),
+                        ),
+                        onTap: () {
+                          if (isFolder) {
+                            setState(() {
+                              _currentPath = item.path;
+                              _loadItems();
+                            });
+                          } else {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => EditorScreen(
+                                  fileName: path.basename(item.path),
+                                  extractedText: (item as File).readAsStringSync(),
+                                ),
+                              ),
+                            ).then((_) => _loadItems());
+                          }
+                        },
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
+      floatingActionButton: FloatingActionButton(
+        onPressed: _createFolder,
+        child: const Icon(Icons.create_new_folder),
+      ),
     );
   }
 }
