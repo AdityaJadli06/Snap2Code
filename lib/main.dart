@@ -428,7 +428,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _otpController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  
+
   bool _isLoading = false;
   bool _otpSent = false;
   bool _isOtpVerified = false;
@@ -485,7 +485,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     // TODO: Implement API call to reset password
     await Future.delayed(const Duration(seconds: 2)); // Simulate network
     setState(() => _isLoading = false);
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Password reset successfully. Please login.")),
@@ -636,6 +636,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     } else if (index == 1) {
       _libraryKey.currentState?._loadItems();
     }
+  }
+
+  // Method to navigate to library and open a specific folder
+  void navigateToFolder(String path) {
+    setState(() {
+      _selectedIndex = 1;
+    });
+    // Give time for the tab to switch then set the path
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _libraryKey.currentState?.openPath(path);
+    });
   }
 
   @override
@@ -798,7 +809,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   final directory = await getApplicationDocumentsDirectory();
                   final snapPath = path.join(directory.path, "Snap2notes");
                   final snapDir = Directory(snapPath);
-                  
+
                   // Ensure parent Snap2notes exists first
                   if (!await snapDir.exists()) {
                     await snapDir.create(recursive: true);
@@ -894,10 +905,10 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 32),
           ],
-          
+
           _buildSectionHeader('Subjects / Folders', _createFolder, actionIcon: Icons.add),
           const SizedBox(height: 12),
-          _folders.isEmpty 
+          _folders.isEmpty
               ? Center(
                   child: TextButton.icon(
                     onPressed: _createFolder,
@@ -920,7 +931,7 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           const SizedBox(height: 32),
-          
+
           if (_lastEditedFile != null) ...[
             _buildSectionHeader('Continue Editing', () {}),
             const SizedBox(height: 12),
@@ -954,7 +965,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildRecentNoteCard(BuildContext context, FileSystemEntity file) {
     final fileName = path.basename(file.path);
     final modified = (file as File).lastModifiedSync();
-    
+
     return GestureDetector(
       onTap: () async {
         await Navigator.push(
@@ -998,25 +1009,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildCategoryItem(Directory folder) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.indigo.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.indigo.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.folder, color: Colors.amber),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              path.basename(folder.path),
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+    return GestureDetector(
+      onTap: () {
+        // Find the main navigation state to trigger tab switch
+        final navState = context.findAncestorStateOfType<_MainNavigationScreenState>();
+        navState?.navigateToFolder(folder.path);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.indigo.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.indigo.withValues(alpha: 0.2)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.folder, color: Colors.amber),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                path.basename(folder.path),
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1760,8 +1778,7 @@ class _EditorScreenState extends State<EditorScreen> {
               }
 
               // Load available folders
-              final items = snapDir.listSync();
-              final folders = items.whereType<Directory>().toList();
+              List<Directory> folders = snapDir.listSync().whereType<Directory>().toList();
 
               if (!mounted) return;
 
@@ -1772,38 +1789,110 @@ class _EditorScreenState extends State<EditorScreen> {
                 builder: (context) => StatefulBuilder(
                   builder: (context, setDialogState) => AlertDialog(
                     title: const Text('Save to Subject'),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ListTile(
-                          title: const Text("Main Folder (Snap2notes)"),
-                          leading: Radio<String>(
-                            value: snapPath,
-                            groupValue: selectedFolder,
-                            onChanged: (val) => setDialogState(() => selectedFolder = val!),
+                    content: SizedBox(
+                      width: double.maxFinite,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: ListView(
+                              shrinkWrap: true,
+                              children: [
+                                ListTile(
+                                  title: const Text("Main Folder (Snap2notes)"),
+                                  leading: Radio<String>(
+                                    value: snapPath,
+                                    groupValue: selectedFolder,
+                                    onChanged: (val) => setDialogState(() => selectedFolder = val!),
+                                  ),
+                                ),
+                                ...folders.map((folder) => ListTile(
+                                  title: Text(path.basename(folder.path)),
+                                  leading: Radio<String>(
+                                    value: folder.path,
+                                    groupValue: selectedFolder,
+                                    onChanged: (val) => setDialogState(() => selectedFolder = val!),
+                                  ),
+                                )),
+                              ],
+                            ),
                           ),
-                        ),
-                        ...folders.map((folder) => ListTile(
-                          title: Text(path.basename(folder.path)),
-                          leading: Radio<String>(
-                            value: folder.path,
-                            groupValue: selectedFolder,
-                            onChanged: (val) => setDialogState(() => selectedFolder = val!),
+                          const Divider(),
+                          ListTile(
+                            leading: const Icon(Icons.add_circle_outline, color: Colors.indigo),
+                            title: const Text("Create New Subject", style: TextStyle(color: Colors.indigo, fontWeight: FontWeight.bold)),
+                            onTap: () async {
+                              String newFolderName = "";
+                              await showDialog(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('New Subject'),
+                                  content: TextField(
+                                    onChanged: (value) => newFolderName = value,
+                                    decoration: const InputDecoration(hintText: "Enter subject name"),
+                                  ),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                                    TextButton(
+                                      onPressed: () async {
+                                        if (newFolderName.isNotEmpty) {
+                                          final newDir = Directory(path.join(snapPath, newFolderName));
+                                          if (!await newDir.exists()) {
+                                            await newDir.create(recursive: true);
+                                          }
+                                          Navigator.pop(context);
+                                          // Refresh the folder list in the parent dialog
+                                          setDialogState(() {
+                                            folders = snapDir.listSync().whereType<Directory>().toList();
+                                            selectedFolder = newDir.path;
+                                          });
+                                        } else {
+                                          Navigator.pop(context);
+                                        }
+                                      },
+                                      child: const Text('Create'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
                           ),
-                        )),
-                      ],
+                        ],
+                      ),
                     ),
                     actions: [
                       TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
                       TextButton(
                         onPressed: () async {
-                          final filePath = path.join(selectedFolder, "${widget.fileName.replaceAll('.txt', '')}.txt");
+                          // Extract Topic Heading from # (First line starting with #)
+                          String topicHeading = "";
+                          final lines = _controller.text.split('\n');
+                          for (var line in lines) {
+                            if (line.trim().startsWith('#')) {
+                              topicHeading = line.replaceAll('#', '').trim();
+                              break;
+                            }
+                          }
+
+                          if (topicHeading.isEmpty) {
+                            topicHeading = widget.fileName;
+                          }
+
+                          // Clean filename (remove special chars)
+                          topicHeading = topicHeading.replaceAll(RegExp(r'[^\w\s-]'), '');
+
+                          String folderName = path.basename(selectedFolder);
+                          if (folderName == "Snap2notes") folderName = "General";
+
+                          final finalFileName = "${folderName}_$topicHeading.txt";
+
+                          final filePath = path.join(selectedFolder, finalFileName);
                           final file = File(filePath);
                           await file.writeAsString(_controller.text);
                           Navigator.pop(context);
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Saved successfully")),
+                              SnackBar(content: Text("Saved as $finalFileName")),
                             );
                           }
                         },
@@ -1890,6 +1979,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<FileSystemEntity> _items = [];
   String _currentPath = "";
   bool _isLoading = true;
+
+  void openPath(String path) {
+    setState(() {
+      _currentPath = path;
+      _loadItems();
+    });
+  }
 
   @override
   void initState() {
