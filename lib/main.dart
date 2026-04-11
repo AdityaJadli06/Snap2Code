@@ -9,6 +9,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'dart:io';
 import 'package:image_cropper/image_cropper.dart';
 import 'services/api_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 late List<CameraDescription> _cameras;
 
@@ -645,6 +646,7 @@ class ScanScreen extends StatefulWidget {
 class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
 
+
   CameraController? _controller;
   bool _isPermissionGranted = false;
   bool _isInitializing = true;
@@ -652,6 +654,18 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   int _cameraIndex = 0;
   bool _isAutoMode = true;
   final ImagePicker _picker = ImagePicker();
+
+  List<String> extractTopics(String text) {
+    final lines = text.split("\n");
+
+    return lines
+        .where((line) =>
+    line.trim().isNotEmpty &&
+        line.length > 5 &&
+        line.length < 60)
+        .take(3)
+        .toList();
+  }
 
 // store multiple images
   List<String> capturedImages = [];
@@ -681,7 +695,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       return croppedFile?.path;
     } catch (e) {
       debugPrint("Crop error: $e");
-      return null;
+      return path;
     }
   }
 
@@ -713,6 +727,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
     List<String> results = await Future.wait(futures);
 
+
+
     String finalText = '';
 
     for (int i = 0; i < results.length; i++) {
@@ -730,6 +746,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
           fileName: 'Scanned Notes (${processedImages.length})',
           imagePath: processedImages.isNotEmpty ? processedImages.last : null,
           extractedText: finalText,
+
         ),
       ),
     );
@@ -881,7 +898,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     );
   }
 
-  @override@override
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
@@ -1208,12 +1225,14 @@ class EditorScreen extends StatefulWidget {
   final String? extractedText;
   final String fileName;
   final String? imagePath;
+  final List<String>? videoLinks;
 
   const EditorScreen({
     super.key,
     required this.fileName,
     this.imagePath,
     this.extractedText,
+    this.videoLinks,
   });
 
   @override
@@ -1221,6 +1240,27 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
+
+  Future<void> _generateNotes() async {
+    final rawText = _controller.text;
+
+    if (rawText.trim().isEmpty) return;
+
+    // 🔥 SHOW LOADING
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final notes = await ApiService.generateNotes(rawText);
+
+    Navigator.pop(context); // close loading
+
+    setState(() {
+      _controller.text = notes;
+    });
+  }
   late TextEditingController _controller;
 
   @override
@@ -1255,19 +1295,14 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
       body: Column(
         children: [
-          /// IMAGE PREVIEW
+          /// IMAGE
           if (widget.imagePath != null)
             Expanded(
               flex: 1,
-              child: Container(
-                width: double.infinity,
-                color: Colors.black12,
-                child: Image.file(File(widget.imagePath!), fit: BoxFit.cover,
-                ),
-              ),
+              child: Image.file(File(widget.imagePath!), fit: BoxFit.cover),
             ),
 
-          /// TEXT EDITOR
+          /// TEXT
           Expanded(
             flex: 2,
             child: Padding(
@@ -1282,6 +1317,33 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
             ),
           ),
+
+          ElevatedButton(
+            onPressed: _generateNotes,
+            child: const Text("Generate Notes"),
+          ),
+
+
+          /// VIDEOS
+          if (widget.videoLinks != null && widget.videoLinks!.isNotEmpty)
+            SizedBox(
+              height: 150,
+              child: ListView(
+                children: widget.videoLinks!.map((link) {
+                  return ListTile(
+                    leading: const Icon(Icons.play_circle),
+                    title: const Text("Watch Explanation"),
+                    subtitle: Text(link),
+                    onTap: () async {
+                      final uri = Uri.parse(link);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri);
+                      }
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
         ],
       ),
     );
