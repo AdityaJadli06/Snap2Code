@@ -860,6 +860,10 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
   CameraController? _controller;
   bool _isPermissionGranted = false;
+  double _currentZoom = 1.0;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  double _baseZoom = 1.0; // for smooth pinch
   bool _isInitializing = true;
   FlashMode _flashMode = FlashMode.off;
   int _cameraIndex = 0;
@@ -1079,6 +1083,9 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     });
     try {
       await cameraController.initialize();
+      _minZoom = await cameraController.getMinZoomLevel();
+      _maxZoom = await cameraController.getMaxZoomLevel();
+      _currentZoom = _minZoom;
     } on CameraException catch (e) {
       debugPrint('Camera exception $e');
     }
@@ -1184,6 +1191,24 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                 ),
               ),
             ),
+          Positioned(
+            bottom: 160,
+            left: 20,
+            right: 20,
+            child: Slider(
+              value: _currentZoom,
+              min: _minZoom,
+              max: _maxZoom,
+              activeColor: Colors.white,
+              inactiveColor: Colors.grey,
+              onChanged: (value) async {
+                setState(() {
+                  _currentZoom = value;
+                });
+                await _controller?.setZoomLevel(value);
+              },
+            ),
+          ),
 
           //Thumbnail
           if (capturedImages.isNotEmpty)
@@ -1340,7 +1365,22 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
           child: SizedBox(
             width: _controller!.value.previewSize!.height,
             height: _controller!.value.previewSize!.width,
-            child: CameraPreview(_controller!),
+            child: GestureDetector(
+              onScaleStart: (details) {
+                _baseZoom = _currentZoom;
+              },
+              onScaleUpdate: (details) async {
+                double zoom = _baseZoom + (details.scale - 1) * 1.5;
+                zoom = zoom.clamp(_minZoom, _maxZoom);
+
+                await _controller!.setZoomLevel(zoom);
+
+                setState(() {
+                  _currentZoom = zoom;
+                });
+              },
+              child: CameraPreview(_controller!),
+            ),
           ),
         ),
       ),
