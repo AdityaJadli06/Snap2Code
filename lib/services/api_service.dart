@@ -7,10 +7,52 @@ import 'package:http/http.dart' as http;
 
 class ApiService {
 
+  static Future<List<dynamic>> fetchNotes(String email) async {
+    final url = Uri.parse(
+      "https://o3j2rdk2v4l3unndb3uqfmpyre0qipes.lambda-url.us-east-1.on.aws/getNotes",
+    );
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode({
+          "userId": email,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return data["notes"] ?? [];
+      } else {
+        return [];
+      }
+    } catch (e) {
+      print("Fetch Notes Error: $e");
+      return [];
+    }
+  }
+
+  static Future<bool> saveNote({
+    required String email,
+    required String title,
+    required String content,
+  }) async {
+    return await saveNoteToCloud(
+      userId: email,
+      title: title,
+      content: content,
+      videos: [],
+    );
+  }
+
   static Future<String?> getYoutubeVideo(String query) async {
     final url = Uri.parse(
       "https://www.googleapis.com/youtube/v3/search"
-          "?part=snippet&type=video&maxResults=1&q=$query&key=AIzaSyBbw-r0ER2TxylvboYJKz2Ae-qcxwAlDY4",
+          "?part=snippet&type=video&maxResults=1&q=$query&key=xxx",
     );
 
     final response = await http.get(url);
@@ -24,6 +66,9 @@ class ApiService {
     return null;
   }
 
+
+
+
   static Future<String> generateNotes(String text) async {
     final url = Uri.parse("https://openrouter.ai/api/v1/chat/completions");
 
@@ -33,7 +78,7 @@ class ApiService {
         headers: {
           "Content-Type": "application/json",
           "Accept": "application/json",
-          "Authorization": "Bearer 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",
+          "Authorization": "Bearer sk-or-v1-xxx",
         },
         body: jsonEncode({
           "model": "openai/gpt-3.5-turbo",
@@ -116,6 +161,39 @@ $text
       return "Exception: $e";
     }
   }
+
+
+
+  static Future<bool> saveNoteToCloud({
+    required String userId,
+    required String title,
+    required String content,
+    required List<String> videos,
+  }) async {
+    final url = Uri.parse(
+      "https://o3j2rdk2v4l3unndb3uqfmpyre0qipes.lambda-url.us-east-1.on.aws/",
+    );
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode({
+          "userId": userId,
+          "title": title,
+          "content": content,
+          "videos": videos,
+        }),
+      );
+
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
 
   static Future<String> performCloudOcr(String imagePath, List<int> imageBytes) async {
     final url = Uri.parse("https://openrouter.ai/api/v1/chat/completions");

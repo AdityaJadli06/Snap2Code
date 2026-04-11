@@ -15,7 +15,7 @@ import 'package:path/path.dart' as path;
 import 'package:image/image.dart' as img;
 
 late List<CameraDescription> _cameras;
-
+List<dynamic> globalNotes = [];
 Future<void> main() async {
   WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
@@ -150,6 +150,9 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.setString('token', result["data"]["token"]);
       await prefs.setString('email', result["data"]["email"]);
       await prefs.setString('name', result["data"]["name"]);
+      final notes = await ApiService.fetchNotes(result["data"]["email"]);
+      globalNotes = notes ?? [];
+
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -318,6 +321,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
       await prefs.setString('token', result["data"]["token"] ?? ""); // Store token if available
       await prefs.setString('email', _emailController.text.trim());
       await prefs.setString('name', _nameController.text.trim());
+      final notes = await ApiService.fetchNotes(result["data"]["email"]);
+      globalNotes = notes ?? [];
 
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(
@@ -2009,6 +2014,14 @@ class _EditorScreenState extends State<EditorScreen> {
                           final filePath = path.join(selectedFolder, finalFileName);
                           final file = File(filePath);
                           await file.writeAsString(_controller.text);
+                          final prefs = await SharedPreferences.getInstance();
+                          final email = prefs.getString('email');
+
+                          await ApiService.saveNote(
+                            email: email!,
+                            title: finalFileName,
+                            content: _controller.text,
+                          );
                           Navigator.pop(context);
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -2133,15 +2146,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   void _loadItems() {
     final dir = Directory(_currentPath);
-    if (!dir.existsSync()) {
-      setState(() {
-        _items = [];
-        _isLoading = false;
-      });
-      return;
+
+    List<FileSystemEntity> localItems = [];
+    if (dir.existsSync()) {
+      localItems = dir.listSync().toList();
     }
+
+    // 🔥 ADD CLOUD NOTES AS FAKE FILES
+    List<FileSystemEntity> cloudItems = globalNotes
+        .where((note) =>
+    !localItems.any((f) =>
+    path.basename(f.path) == note["title"]))
+        .map((note) => File(note["title"]))
+        .toList();
+
     setState(() {
-      _items = dir.listSync().toList();
+      _items = [...localItems, ...cloudItems];
       _isLoading = false;
     });
   }
@@ -2183,11 +2203,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _deleteItem(FileSystemEntity item) async {
+    final name = path.basename(item.path);
+
+    final isCloud = globalNotes.any((n) => n["title"] == name);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete'),
-        content: Text('Are you sure you want to delete ${path.basename(item.path)}?'),
+        content: Text('Delete $name?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
@@ -2196,11 +2220,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
 
     if (confirmed == true) {
-      if (item is Directory) {
-        await item.delete(recursive: true);
+      if (isCloud) {
+        globalNotes.removeWhere((n) => n["title"] == name);
       } else {
-        await item.delete();
+        if (item is Directory) {
+          await item.delete(recursive: true);
+        } else {
+          await item.delete();
+        }
       }
+
       _loadItems();
     }
   }
@@ -2223,12 +2252,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 return ListTile(
                   leading: const Icon(Icons.arrow_upward),
                   title: const Text(".."),
-                  onTap: () {
-                    setState(() {
-                      _currentPath = Directory(_currentPath).parent.path;
-                      _loadItems();
-                    });
-                  },
+                    onTap: () {
+                      setState(() {
+                        _currentPath = Directory(_currentPath).parent.path;
+                        _loadItems();
+                      });
+                    },
                 );
               }
               return const SizedBox();
@@ -2259,15 +2288,35 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               _loadItems();
                             });
                           } else {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => EditorScreen(
-                                  fileName: path.basename(item.path),
-                                  extractedText: item is File ? item.readAsStringSync() : '',
+                            final cloudNote = globalNotes.where(
+                                  (n) => n["title"] == path.basename(item.path),
+                            ).isNotEmpty
+                                ? globalNotes.firstWhere(
+                                  (n) => n["title"] == path.basename(item.path),
+                            )
+                                : null;
+
+                            if (cloudNote != null) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => EditorScreen(
+                                    fileName: cloudNote["title"],
+                                    extractedText: cloudNote["content"],
+                                  ),
                                 ),
-                              ),
-                            ).then((_) => _loadItems());
+                              );
+                            } else {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => EditorScreen(
+                                    fileName: path.basename(item.path),
+                                    extractedText: item is File ? item.readAsStringSync() : '',
+                                  ),
+                                ),
+                              ).then((_) => _loadItems());
+                            }
                           }
                         },
                       );
@@ -2285,8 +2334,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 }
 
-class SearchScreen extends StatelessWidget {
+class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
+
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  List<dynamic> searchResults = [];
 
   @override
   Widget build(BuildContext context) {
@@ -2297,19 +2353,45 @@ class SearchScreen extends StatelessWidget {
           child: SearchBar(
             leading: const Icon(Icons.search),
             hintText: 'Search your notes...',
-            onChanged: (value) {},
+            onChanged: (value) {
+              setState(() {
+                searchResults = globalNotes.where((note) =>
+                note["title"].toLowerCase().contains(value.toLowerCase()) ||
+                    note["content"].toLowerCase().contains(value.toLowerCase())
+                ).toList();
+              });
+            },
           ),
         ),
-        const Expanded(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.search_off, size: 64, color: Colors.grey),
-                SizedBox(height: 16),
-                Text('No results found', style: TextStyle(color: Colors.grey)),
-              ],
-            ),
+        Expanded(
+          child: searchResults.isEmpty
+              ? const Center(child: Text("No results"))
+              : ListView.builder(
+            itemCount: searchResults.length,
+            itemBuilder: (context, index) {
+              final note = searchResults[index];
+              return ListTile(
+                title: Text(note["title"]),
+                subtitle: Text(
+                  note["content"].length > 50
+                      ? note["content"].substring(0, 50)
+                      : note["content"],
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => EditorScreen(
+                        fileName: note["title"],
+                        extractedText: note["content"],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
           ),
         ),
       ],
@@ -2321,6 +2403,7 @@ class ProfileSettingsScreen extends StatelessWidget {
   final Function(bool) onThemeChanged;
   final bool isDarkMode;
   final ThemeMode currentThemeMode;
+
   const ProfileSettingsScreen({
     super.key,
     required this.onThemeChanged,
@@ -2335,10 +2418,11 @@ class ProfileSettingsScreen extends StatelessWidget {
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (context) => LoginScreen(
-            onThemeChanged: onThemeChanged,
-            currentThemeMode: currentThemeMode,
-          ),
+          builder: (context) =>
+              LoginScreen(
+                onThemeChanged: onThemeChanged,
+                currentThemeMode: currentThemeMode,
+              ),
         ),
             (route) => false,
       );
@@ -2384,7 +2468,8 @@ class ProfileSettingsScreen extends StatelessWidget {
                 children: [
                   Text(
                     name,
-                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        fontSize: 24, fontWeight: FontWeight.bold),
                   ),
                   Text(
                     email,
